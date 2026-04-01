@@ -947,8 +947,10 @@ export async function loadCliConfig(
     approvalMode,
     disableYoloMode:
       settings.security?.disableYoloMode || settings.admin?.secureModeEnabled,
-    simulateUser: !!argv.simulateUser,
-    knowledgeSource: argv.knowledgeSource,
+    simulateUser: !!argv.simulateUser || !!argv.knowledgeSource,
+    knowledgeSource: argv.knowledgeSource
+      ? path.resolve(cwd, resolvePath(argv.knowledgeSource))
+      : undefined,
     disableAlwaysAllow:
       settings.security?.disableAlwaysAllow ||
       settings.admin?.secureModeEnabled,

@@ -856,7 +856,7 @@ const ChoiceQuestionView: React.FC<ChoiceQuestionViewProps> = ({
       ? question.unconstrainedHeight
         ? Math.max(1, listHeight - selectionItems.length * 2)
         : Math.min(
-            15,
+            30,
             Math.max(1, listHeight - Math.min(selectionItems.length, 5) * 2),
           )
       : undefined;

@@ -907,6 +907,25 @@ describe('loadCliConfig', () => {
     expect(config.getApprovalMode()).toBe(ApprovalMode.DEFAULT);
   });
 
+  it('should enable simulateUser when knowledgeSource is provided', async () => {
+    process.argv = ['node', 'script.js', '--knowledge-source', 'k.txt'];
+    const argv = await parseArguments(createTestMergedSettings());
+    const settings = createTestMergedSettings();
+    const config = await loadCliConfig(settings, 'test-session', argv);
+    expect(config.getSimulateUser()).toBe(true);
+    expect(config.getKnowledgeSource()).toBe(
+      path.resolve(process.cwd(), 'k.txt'),
+    );
+  });
+
+  it('should enable simulateUser when simulateUser flag is provided', async () => {
+    process.argv = ['node', 'script.js', '--simulate-user'];
+    const argv = await parseArguments(createTestMergedSettings());
+    const settings = createTestMergedSettings();
+    const config = await loadCliConfig(settings, 'test-session', argv);
+    expect(config.getSimulateUser()).toBe(true);
+  });
+
   it('should be non-interactive when isCommand is set', async () => {
     process.argv = ['node', 'script.js', 'mcp', 'list'];
     const argv = await parseArguments(createTestMergedSettings());

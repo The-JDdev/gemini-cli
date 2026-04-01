@@ -13,6 +13,13 @@ import {
 import type { Writable } from 'node:stream';
 import * as fs from 'node:fs';
 
+interface SimulatorResponse {
+  action?: string;
+  thought?: string;
+  used_knowledge?: boolean;
+  new_rule?: string;
+}
+
 export class UserSimulator {
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
@@ -34,7 +41,7 @@ export class UserSimulator {
     if (!this.config.getSimulateUser()) {
       return;
     }
-    const source = (this.config as any).getKnowledgeSource?.();
+    const source = this.config.getKnowledgeSource?.();
     if (source) {
       if (!fs.existsSync(source)) {
         try {
@@ -196,7 +203,7 @@ ${strippedScreen}
       );
 
       let responseText = '';
-      let parsedJson: any = {};
+      let parsedJson: SimulatorResponse = {};
       try {
         let cleanJson = response.text || '';
         const startIdx = cleanJson.indexOf('{');
@@ -206,7 +213,8 @@ ${strippedScreen}
         } else {
           cleanJson = cleanJson.replace(/^```json\s*|\s*```$/gm, '').trim();
         }
-        parsedJson = JSON.parse(cleanJson);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        parsedJson = JSON.parse(cleanJson) as SimulatorResponse;
         responseText = parsedJson.action || '';
       } catch (err) {
         debugLogger.error('Failed to parse simulator response as JSON', err);
