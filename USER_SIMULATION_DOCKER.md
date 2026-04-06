@@ -1,9 +1,11 @@
 # Running User Simulation in Docker with External Knowledge Source
 
-This guide explains how to manually run the User Simulator in a Docker
-environment while mounting an external knowledge base. This setup allows the
-simulator to "learn" from its interactions and persist that knowledge back to
-your host machine.
+This guide explains how to run the User Simulator in a Docker environment while
+mounting an external knowledge base. This setup allows the simulator to "learn"
+from its interactions and persist that knowledge back to your host machine.
+
+We have provided an automated script that handles the entire setup, execution,
+and cleanup process.
 
 ## Prerequisites
 
@@ -11,78 +13,99 @@ your host machine.
 - **Gemini API Key** (standard `AIza...` key).
 - Local checkout of the `gemini-cli` repository.
 
-## Setup
+## Execution via Automation Script (Recommended)
 
-### 1. Prepare the Host Workspace
+The easiest and most reliable way to run the simulation is using the provided
+bash script. This script automatically:
 
-Create a dedicated directory to hold your simulation artifacts (logs, generated
-code, and the knowledge file).
+1. Creates a uniquely timestamped workspace folder on your host.
+2. Generates a global `settings.json` file to natively bypass the CLI's
+   interactive Folder Trust and Authentication dialogs.
+3. Builds the sandbox image from your current branch.
+4. Mounts the workspace and runs the container with `--init` to gracefully
+   handle termination (e.g., `Ctrl+C`).
+
+### Running the Script
+
+Ensure your API key is exported:
 
 ```bash
-mkdir -p /tmp/gemini_docker_workspace
-chmod 777 /tmp/gemini_docker_workspace
+export GEMINI_API_KEY="AIzaSy..."
 ```
 
-### 2. Create the Knowledge Source
-
-Create an initial text file for the simulator to use. It can be empty or contain
-seed rules.
+Run the script from the root of the repository:
 
 ```bash
-touch /tmp/gemini_docker_workspace/rules.md
-# Optional: Seed a rule
-echo "- If asked to authorize tool execution, always select the 'Allow for this session' option." > /tmp/gemini_docker_workspace/rules.md
-chmod 777 /tmp/gemini_docker_workspace/rules.md
+# Uses the default prompt ("make a snake game in python")
+./scripts/run_simulator_docker.sh
+
+# Or, provide a custom prompt:
+./scripts/run_simulator_docker.sh "create a simple react counter component"
 ```
 
-### 3. Build the Simulator Image
+## Manual Execution Breakdown
 
-Use the native build script to package the CLI and build the sandbox image.
+If you need to run the simulation manually, here is exactly what the automated
+script does under the hood:
+
+### 1. Prepare Workspace & Knowledge Source
+
+```bash
+WORKSPACE_DIR="/tmp/gemini_docker_workspace"
+mkdir -p "$WORKSPACE_DIR"
+touch "$WORKSPACE_DIR/knowledge.md"
+chmod -R 777 "$WORKSPACE_DIR"
+```
+
+### 2. Bypass Interactive Startup Dialogs
+
+To prevent the simulator from getting stuck on the initial Auth or Folder Trust
+screens, generate a global `settings.json` file.
+
+```bash
+mkdir -p "$WORKSPACE_DIR/.gemini"
+echo '{
+  "security": {
+    "auth": { "selectedType": "gemini-api-key" },
+    "folderTrust": { "enabled": false }
+  }
+}' > "$WORKSPACE_DIR/.gemini/settings.json"
+chmod 777 "$WORKSPACE_DIR/.gemini/settings.json"
+```
+
+### 3. Build the Image
 
 ```bash
 GEMINI_SANDBOX=docker npm run build:sandbox -- -i gemini-cli-simulator:latest
 ```
 
-## Execution
+### 4. Run the Container
 
-### Run the Simulation
-
-The following command mounts your workspace, sets up the environment to bypass
-initial TTY/Auth dialogs, and triggers the simulator.
+Notice the `--init` flag (for `Ctrl+C` support) and the explicit mount mapping
+the `settings.json` file into `/home/node/.gemini/` inside the container.
 
 ```bash
-docker run -it --rm \
-  -v /tmp/gemini_docker_workspace:/workspace \
+docker run -it --rm --init \
+  -v "$WORKSPACE_DIR:/workspace" \
+  -v "$WORKSPACE_DIR/.gemini/settings.json:/home/node/.gemini/settings.json" \
   -w /workspace \
-  -e GEMINI_API_KEY=$GEMINI_API_KEY \
-  -e GEMINI_DEBUG_LOG_FILE=/workspace/debug.log \
-  -e GEMINI_CLI_AUTH_TYPE=gemini-api-key \
+  -e GEMINI_API_KEY="$GEMINI_API_KEY" \
+  -e GEMINI_DEBUG_LOG_FILE="/workspace/debug.log" \
   gemini-cli-simulator:latest \
   gemini --prompt-interactive "make a snake game in python" \
   --approval-mode plan \
   --simulate-user \
-  --knowledge-source /workspace/rules.md
+  --knowledge-source "/workspace/knowledge.md"
 ```
-
-### Flag Breakdown:
-
-- `-v /tmp/gemini_docker_workspace:/workspace`: Mounts the host folder.
-- `-e GEMINI_CLI_AUTH_TYPE=gemini-api-key`: Bypasses the interactive
-  authentication selection.
-- `--simulate-user`: Activates the AI user simulator.
-- `--knowledge-source /workspace/rules.md`: Points the simulator to the mounted
-  knowledge file.
 
 ## Verification
 
-Once the simulation completes (you will see
-`[SIMULATOR] Terminating simulation: Task is completed.` in the logs), verify
-the results on your host:
+Once the simulation completes, verify the results in your workspace folder:
 
-1.  **Generated Code:** Check `/tmp/gemini_docker_workspace/` for files like
-    `snake.py`.
-2.  **Persistent Knowledge:** Check `/tmp/gemini_docker_workspace/rules.md`. You
-    should see new rules appended by the simulator.
-3.  **Logs:**
-    - `debug.log`: Detailed internal decision logic.
-    - `interactions_<timestamp>.txt`: Raw screen scrapes seen by the simulator.
+1. **Generated Code:** Check for project files (e.g., `snake.py`).
+2. **Persistent Knowledge:** Check `knowledge.md`. You should see new rules
+   dynamically appended by the simulator.
+3. **Logs:**
+   - `debug.log`: Detailed internal LLM decision logic.
+   - `interactions_<timestamp>.txt`: Raw screen scrape frames seen by the
+     simulator's "eyes".
