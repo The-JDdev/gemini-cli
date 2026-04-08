@@ -8,6 +8,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import * as Diff from 'diff';
 import type { Config } from '../config/config.js';
 import {
   SESSION_FILE_PREFIX,
@@ -420,19 +421,18 @@ async function buildExistingSkillsSummary(
       const builtinSkills: string[] = [];
 
       for (const s of discoveredSkills) {
-        const entry = `- **${s.name}**: ${s.description}`;
         const loc = s.location;
         if (loc.includes('/bundle/') || loc.includes('\\bundle\\')) {
-          builtinSkills.push(entry);
+          builtinSkills.push(`- **${s.name}**: ${s.description}`);
         } else if (loc.startsWith(userSkillsDir)) {
-          globalSkills.push(entry);
+          globalSkills.push(`- **${s.name}**: ${s.description} (${loc})`);
         } else if (
           loc.includes('/extensions/') ||
           loc.includes('\\extensions\\')
         ) {
-          extensionSkills.push(entry);
+          extensionSkills.push(`- **${s.name}**: ${s.description}`);
         } else {
-          workspaceSkills.push(entry);
+          workspaceSkills.push(`- **${s.name}**: ${s.description} (${loc})`);
         }
       }
 
@@ -491,6 +491,110 @@ function buildAgentLoopContext(config: Config): AgentLoopContext {
     geminiClient: config.getGeminiClient(),
     sandboxManager: config.sandboxManager,
   };
+}
+
+/**
+ * Validates all .patch files in the skills directory using the `diff` library.
+ * Parses each patch, reads the target file(s), and attempts a dry-run apply.
+ * Removes patches that fail validation. Returns the filenames of valid patches.
+ */
+export async function validatePatches(skillsDir: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(skillsDir);
+  } catch {
+    return [];
+  }
+
+  const patchFiles = entries.filter((e) => e.endsWith('.patch'));
+  const validPatches: string[] = [];
+
+  for (const patchFile of patchFiles) {
+    const patchPath = path.join(skillsDir, patchFile);
+    let valid = true;
+    let reason = '';
+
+    try {
+      const patchContent = await fs.readFile(patchPath, 'utf-8');
+      const parsedPatches = Diff.parsePatch(patchContent);
+
+      if (parsedPatches.length === 0) {
+        valid = false;
+        reason = 'no hunks found in patch';
+      }
+
+      for (const patch of parsedPatches) {
+        if (!valid) break;
+
+        // Determine the target file path from the patch headers.
+        // The agent writes patches with identical --- and +++ paths.
+        // For new files, oldFileName is /dev/null.
+        const targetPath = patch.newFileName;
+        if (!targetPath) {
+          valid = false;
+          reason = 'missing target file path in patch header';
+          break;
+        }
+
+        // Reject patches targeting builtin or extension skills
+        if (
+          targetPath.includes('/bundle/') ||
+          targetPath.includes('\\bundle\\')
+        ) {
+          valid = false;
+          reason = `cannot patch builtin skill: ${targetPath}`;
+          break;
+        }
+        if (
+          targetPath.includes('/extensions/') ||
+          targetPath.includes('\\extensions\\')
+        ) {
+          valid = false;
+          reason = `cannot patch extension skill: ${targetPath}`;
+          break;
+        }
+
+        if (patch.oldFileName === '/dev/null') {
+          // New file creation — valid as long as hunks parsed successfully
+          continue;
+        }
+
+        let source: string;
+        try {
+          source = await fs.readFile(targetPath, 'utf-8');
+        } catch {
+          valid = false;
+          reason = `target file not found: ${targetPath}`;
+          break;
+        }
+
+        const applied = Diff.applyPatch(source, patch);
+        if (applied === false) {
+          valid = false;
+          reason = `patch does not apply cleanly to ${targetPath}`;
+        }
+      }
+    } catch (err) {
+      valid = false;
+      reason = `failed to read or parse patch: ${err}`;
+    }
+
+    if (valid) {
+      validPatches.push(patchFile);
+      debugLogger.log(`[MemoryService] Patch validated: ${patchFile}`);
+    } else {
+      debugLogger.warn(
+        `[MemoryService] Removing invalid patch ${patchFile}: ${reason}`,
+      );
+      try {
+        await fs.unlink(patchPath);
+      } catch {
+        // Best-effort cleanup
+      }
+    }
+  }
+
+  return validPatches;
 }
 
 /**
@@ -618,12 +722,20 @@ export async function startMemoryService(config: Config): Promise<void> {
     try {
       const entriesAfter = await fs.readdir(skillsDir);
       for (const e of entriesAfter) {
-        if (!skillsBefore.has(e)) {
+        if (!skillsBefore.has(e) && !e.endsWith('.patch')) {
           skillsCreated.push(e);
         }
       }
     } catch {
       // Skills dir read failed
+    }
+
+    // Validate any .patch files the agent generated
+    const validPatches = await validatePatches(skillsDir);
+    if (validPatches.length > 0) {
+      debugLogger.log(
+        `[MemoryService] ${validPatches.length} valid patch(es): ${validPatches.join(', ')}`,
+      );
     }
 
     // Record the run with full metadata
