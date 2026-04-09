@@ -1347,6 +1347,11 @@ export class ShellExecutionService {
             render(true);
             cmdCleanup?.();
 
+            const activePty = ShellExecutionService.activePtys.get(ptyPid);
+            if (activePty) {
+              emitPendingLines(activePty, ptyPid, onOutputEvent, true);
+            }
+
             const event: ShellOutputEvent = {
               type: 'exit',
               exitCode,
